@@ -1,236 +1,124 @@
-#include "network/networkmanager.h"
-#include "network/messagecodec.h"
-#include "network/mytcpsocket.h"
-#include <spdlog/spdlog.h>
-#include <chrono>
+#include "networkmanager.h"
+#include "connection.h"
+#include "messagehub.h"
 #include <climits>
-#include <cstdint>
-#include <mutex>
-#include <stdexcept>
-
-extern QUEUE_DATA<MESG> queue_send;
-extern QUEUE_DATA<MESG> queue_recv;
-
-using NetworkInternal::OutgoingItem;
-using NetworkInternal::RecvWorker;
-using NetworkInternal::SendWorker;
-
-SendWorker::SendWorker(QObject *parent) : QThread(parent) { }
-
-void SendWorker::enqueue(const OutgoingItem &item) {
-    std::unique_lock<std::mutex> locker(m_queueLock);
-    while (m_queue.size() > QUEUE_MAXSIZE)
-        m_queueCond.wait(locker);
-    m_queue.push(item);
-    m_queueCond.notify_one();
-}
-
-void SendWorker::clearImages()
-{
-    std::unique_lock<std::mutex> locker(m_queueLock);
-    std::queue<OutgoingItem> kept;
-    while (!m_queue.empty()) {
-        const OutgoingItem popped = m_queue.front();
-        if (popped.kind != OutgoingItem::Kind::Image)
-            kept.push(popped);
-    }
-    m_queue.swap(kept);
-}
-
-void SendWorker::stopWorker()
-{
-    {
-        std::unique_lock<std::mutex> locker(m_runLock);
-        m_canRun = false;
-    }
-    std::unique_lock<std::mutex> locker(m_queueLock);
-    m_queueCond.notify_all();
-}
-
-void SendWorker::run()
-{
-    spdlog::info("[NetworkManager::SendWorker] start {}", reinterpret_cast<quintptr>(QThread::currentThreadId()));
-    m_canRun = true;
-    for (;;) {
-        OutgoingItem item;
-        {
-            std::unique_lock<std::mutex> locker(m_queueLock);
-            while (m_queue.empty()) {
-                if (m_queueCond.wait_for(locker, std::chrono::seconds(WAITSECONDS))
-                    == std::cv_status::timeout) {
-                    std::lock_guard<std::mutex> runLocker(m_runLock);
-                    if (!m_canRun) {
-                        spdlog::info("[NetworkManager::SendWorker] 发送消息线程终止{}", reinterpret_cast<quintptr>(QThread::currentThreadId()));
-                        return;
-                    }
-                }
-            }
-            item = m_queue.front();
-            m_queue.pop();
-            m_queueCond.notify_one();
-        }
-
-        MESG *packet = nullptr;
-        switch (item.kind) {
-        case OutgoingItem::Kind::Control:
-            packet = MessageCodec::encodeControl(item.controlType);
-            break;
-        case OutgoingItem::Kind::JoinRoom:
-            packet = MessageCodec::encodeJoinMeeting(static_cast<std::uint32_t>(std::stoul(item.text)));
-            break;
-        case OutgoingItem::Kind::Text:
-            packet = MessageCodec::encodeText(item.text);
-            break;
-        case OutgoingItem::Kind::Image:
-            packet = MessageCodec::encodeImage(item.image);
-            break;
-        }
-
-        if (!packet) {
-            spdlog::error("[NetworkManager::SendWorker] encode failed");
-            continue;
-        }
-        queue_send.push_msg(packet);
-    }
-}
-
-RecvWorker::RecvWorker(QObject *parent) : QThread(parent) { }
-
-void RecvWorker::stopWorker()
-{
-    {
-        std::lock_guard<std::mutex> locker(m_runLock);
-        m_canRun = false;
-    }
-    queue_recv.wakeAll();
-}
-
-void RecvWorker::run()
-{
-    spdlog::info("[NetworkManager::RecvWorker] start {}", reinterpret_cast<quintptr>(QThread::currentThreadId()));
-    m_canRun = true;
-    for (;;) {
-        {
-            std::lock_guard<std::mutex> locker(m_runLock);
-            if (!m_canRun) {
-                spdlog::info("[NetworkManager::RecvWorker] stop {}", reinterpret_cast<quintptr>(QThread::currentThreadId()));
-                return;
-            }
-        }
-
-        MESG *msg = queue_recv.pop_msg();
-        if (!msg)
-            continue;
-
-        spdlog::info("[NetworkManager::RecvWorker] dispatch type={} len={}", static_cast<short>(msg->msg_type), msg->len);
-        emit packetReady(msg);
-    }
-}
 
 NetworkManager::NetworkManager(QObject *parent)
     : QObject(parent)
 {
-    qRegisterMetaType<MESG *>("MESG*");
+    qRegisterMetaType<Message>("Message");
 
-    _socket = new MyTcpSocket(this);
-    _sendWorker = new SendWorker(this);
-    _recvWorker = new RecvWorker(this);
+    _hub = new MessageHub(this);
+    _connection = new Connection(nullptr);
+    _connection->setMessageHub(_hub);
 
-    /*发送文本完成之后发送sendTextFinished信号,发送textSend信号*/
-    connect(_socket, &MyTcpSocket::sendTextOver, this, &NetworkManager::sendTextFinished);
-    /*从数据接收队列取出数据之后发送packetReady信号,发送packetReceived信号*/
-    connect(_recvWorker, &RecvWorker::packetReady, this, &NetworkManager::packetReceived);
+    connect(_connection, &Connection::connected, this, [this]() {
+        _hub->startSendWorkers();
+    });
+    connect(_connection, &Connection::disconnected, this, [this]() {
+        _hub->stopSendWorkers();
+    });
 
-    _sendWorker->start();
-    _recvWorker->start();
+    connect(_hub, &MessageHub::requestMessageReady, this, &NetworkManager::requestMessageReady);
+    connect(_hub, &MessageHub::userInfoMessageReady, this, &NetworkManager::userInfoMessageReady);
+    connect(_hub, &MessageHub::textMessageReady, this, &NetworkManager::textMessageReady);
+    connect(_hub, &MessageHub::videoMessageReady, this, &NetworkManager::videoMessageReady);
+    connect(_hub, &MessageHub::textSendFinished, this, &NetworkManager::sendTextFinished);
+
+    _hub->start(_connection);
 }
 
 NetworkManager::~NetworkManager()
 {
     stop();
+    delete _connection;
+    _connection = nullptr;
+}
+
+MessageHub *NetworkManager::messageHub() const
+{
+    return _hub;
 }
 
 bool NetworkManager::connectToServer(const QString &ip, const QString &port, QWidget *validateParent)
 {
-    if (!_socket)
+    if (!_connection)
         return false;
-    if (validateParent && !MyTcpSocket::IpPortValid(validateParent, ip, port))
+    if (validateParent && !Connection::validateIpPort(validateParent, ip, port))
         return false;
-    return _socket->connectToServer(ip, port, QIODevice::ReadWrite);
+    return _connection->connectToServer(ip, port);
 }
 
 void NetworkManager::disconnectFromHost()
 {
-    if (_socket)
-        _socket->disconnectFromHost();
+    if (_connection)
+        _connection->disconnectFromHost();
 }
 
-std::uint32_t NetworkManager::localIp() const {
-    return _socket ? _socket->getlocalip() : UINT32_MAX;
+std::uint32_t NetworkManager::localIp() const
+{
+    return _connection ? _connection->localIp() : UINT32_MAX;
 }
 
-void NetworkManager::sendCreateMeeting() {
-    OutgoingItem item; //创建会议请求
-    item.kind = OutgoingItem::Kind::Control; //控制类型
-    item.controlType = CREATE_MEETING; //创建会议请求
-    _sendWorker->enqueue(item); //发送请求
+void NetworkManager::sendCreateMeeting()
+{
+    Message msg;
+    msg.kind = Message::Kind::CreateMeeting;
+    _hub->enqueueSend(std::move(msg));
 }
 
 void NetworkManager::sendJoinMeeting(const std::string &roomNo)
 {
-    OutgoingItem item;
-    item.kind = OutgoingItem::Kind::JoinRoom;
-    item.text = roomNo;
-    _sendWorker->enqueue(item);
+    Message msg;
+    msg.kind = Message::Kind::JoinMeeting;
+    msg.text = roomNo;
+    _hub->enqueueSend(std::move(msg));
 }
 
 void NetworkManager::sendText(const std::string &text)
 {
-    OutgoingItem item;
-    item.kind = OutgoingItem::Kind::Text;
-    item.text = text;
-    _sendWorker->enqueue(item);
+    Message msg;
+    msg.kind = Message::Kind::SendText;
+    msg.text = text;
+    _hub->enqueueSend(std::move(msg));
 }
 
 void NetworkManager::sendCloseCamera()
 {
-    OutgoingItem item;
-    item.kind = OutgoingItem::Kind::Control;
-    item.controlType = CLOSE_CAMERA;
-    _sendWorker->enqueue(item);
+    Message msg;
+    msg.kind = Message::Kind::CloseCamera;
+    _hub->enqueueSend(std::move(msg));
 }
 
 void NetworkManager::sendImage(const QImage &image)
 {
     if (image.isNull())
         return;
-    OutgoingItem item;
-    item.kind = OutgoingItem::Kind::Image;
-    item.image = image;
-    _sendWorker->enqueue(item);
+    Message msg;
+    msg.kind = Message::Kind::SendImage;
+    msg.image = image;
+    _hub->enqueueSend(std::move(msg));
+}
+
+void NetworkManager::sendAudio(const QByteArray &pcm)
+{
+    if (pcm.isEmpty())
+        return;
+    Message msg;
+    msg.kind = Message::Kind::SendAudio;
+    msg.audio = pcm;
+    _hub->enqueueSend(std::move(msg));
 }
 
 void NetworkManager::clearPendingImages()
 {
-    _sendWorker->clearImages();
+    _hub->clearPendingVideo();
 }
 
 void NetworkManager::stop()
 {
-    if (_recvWorker) {
-        _recvWorker->stopWorker();
-        if (_recvWorker->isRunning()) {
-            _recvWorker->wait(3000);
-        }
-    }
-    if (_sendWorker) {
-        _sendWorker->stopWorker();
-        if (_sendWorker->isRunning()) {
-            _sendWorker->wait(3000);
-        }
-    }
-    if (_socket && _socket->isRunning()) {
-        _socket->stopImmediately();
-        _socket->wait(3000);
-    }
+    if (_hub)
+        _hub->stop();
+    if (_connection)
+        _connection->stopImmediately();
 }
