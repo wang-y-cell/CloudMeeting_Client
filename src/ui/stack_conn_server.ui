@@ -1,13 +1,13 @@
 <?xml version="1.0" encoding="UTF-8"?>
 <ui version="4.0">
- <class>stack_join_meet</class>
- <widget class="QWidget" name="stack_join_meet">
+ <class>stack_conn_server</class>
+ <widget class="QWidget" name="stack_conn_server">
   <property name="geometry">
    <rect>
     <x>0</x>
     <y>0</y>
-    <width>617</width>
-    <height>594</height>
+    <width>684</width>
+    <height>591</height>
    </rect>
   </property>
   <property name="windowTitle">
@@ -28,9 +28,6 @@
    </property>
    <item>
     <widget class="QScrollArea" name="scrollArea">
-     <property name="frameShape">
-      <enum>QFrame::Shape::NoFrame</enum>
-     </property>
      <property name="widgetResizable">
       <bool>true</bool>
      </property>
@@ -39,8 +36,8 @@
        <rect>
         <x>0</x>
         <y>0</y>
-        <width>617</width>
-        <height>594</height>
+        <width>682</width>
+        <height>589</height>
        </rect>
       </property>
       <layout class="QVBoxLayout" name="verticalLayout_2">
@@ -67,7 +64,7 @@
          <property name="minimumSize">
           <size>
            <width>0</width>
-           <height>100</height>
+           <height>200</height>
           </size>
          </property>
          <property name="frameShape">
@@ -76,40 +73,16 @@
          <property name="frameShadow">
           <enum>QFrame::Shadow::Raised</enum>
          </property>
-         <layout class="QHBoxLayout" name="horizontalLayout" stretch="1,4,4">
-          <property name="leftMargin">
-           <number>9</number>
-          </property>
-          <property name="topMargin">
-           <number>9</number>
-          </property>
-          <property name="rightMargin">
-           <number>9</number>
-          </property>
-          <property name="bottomMargin">
-           <number>9</number>
-          </property>
-          <item>
-           <widget class="QLabel" name="roomN_label">
-            <property name="sizePolicy">
-             <sizepolicy hsizetype="Preferred" vsizetype="Preferred">
-              <horstretch>0</horstretch>
-              <verstretch>0</verstretch>
-             </sizepolicy>
-            </property>
+         <layout class="QGridLayout" name="gridLayout">
+          <item row="0" column="0">
+           <widget class="QLabel" name="label">
             <property name="text">
-             <string>&lt;html&gt;&lt;head/&gt;&lt;body&gt;&lt;p align=&quot;center&quot;&gt;&lt;span style=&quot; font-size:14pt;&quot;&gt;房间号:&lt;/span&gt;&lt;/p&gt;&lt;/body&gt;&lt;/html&gt;</string>
+             <string>ip</string>
             </property>
            </widget>
           </item>
-          <item>
-           <widget class="QLineEdit" name="roomN">
-            <property name="sizePolicy">
-             <sizepolicy hsizetype="Preferred" vsizetype="Fixed">
-              <horstretch>0</horstretch>
-              <verstretch>0</verstretch>
-             </sizepolicy>
-            </property>
+          <item row="0" column="1">
+           <widget class="QLineEdit" name="ip_line_edit">
             <property name="minimumSize">
              <size>
               <width>0</width>
@@ -118,22 +91,33 @@
             </property>
            </widget>
           </item>
-          <item>
-           <widget class="QPushButton" name="joinMeeting_btn">
-            <property name="sizePolicy">
-             <sizepolicy hsizetype="Preferred" vsizetype="Fixed">
-              <horstretch>0</horstretch>
-              <verstretch>0</verstretch>
-             </sizepolicy>
+          <item row="0" column="3">
+           <widget class="QLabel" name="label_2">
+            <property name="text">
+             <string>端口</string>
             </property>
+           </widget>
+          </item>
+          <item row="0" column="4">
+           <widget class="QLineEdit" name="port_line_edit">
             <property name="minimumSize">
              <size>
               <width>0</width>
               <height>30</height>
              </size>
             </property>
+           </widget>
+          </item>
+          <item row="1" column="1" colspan="4">
+           <widget class="QPushButton" name="connServer_btn">
+            <property name="minimumSize">
+             <size>
+              <width>0</width>
+              <height>50</height>
+             </size>
+            </property>
             <property name="text">
-             <string>加入房间</string>
+             <string>连接服务器</string>
             </property>
            </widget>
           </item>
